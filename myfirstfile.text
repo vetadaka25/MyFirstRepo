@@ -6,3 +6,6 @@ this is shravan and I can do changes in the file.
 In future, more developers can do changes :) 
 
 
+#!/bin/bash
+sudo yum install python2 -y
+sudo dnf install -y https://s3.us-east-1.amazonaws.com/amazon-ssm-us-east-1/latest/linux_amd64/amazon-ssm-agent.rpm
