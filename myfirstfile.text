@@ -1,7 +1,712 @@
-Hey this is my first file
+-------------------------------
+# terraform - modules - patch - main.tf
+-------------------------------
 
-Hey even i can change the file now hahah!
-this is shravan and I can do changes in the file. 
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 3.33.0"
+    }
+  }
+}
 
-In future, more developers can do changes :) 
+variable patchgroup {
+  description = "tag value for Patch Group"
+  type = string
+}
 
+variable mtcwindowid {
+  description = "ID for Maintenance Window resource"
+  type = string
+}
+
+variable baseline {
+  description = "Patch baseline to use"
+  type = string
+}
+
+variable sns_topic {
+  description = "SNS Topic to send notifications to"
+  type = string
+}
+
+variable service_role {
+  description = "IAM role to run under"
+  type = string
+}
+
+# We are using the AWS managed patch baselines.  So, create patch groups
+resource "aws_ssm_patch_group" "patch" {
+  baseline_id = var.baseline
+  patch_group = var.patchgroup
+}
+
+resource "aws_ssm_maintenance_window_target" "patch" {
+  window_id     = var.mtcwindowid
+  name          = "${var.patchgroup}-maintenance-window-target"
+  description   = "${var.patchgroup} Patch Targets"
+  resource_type = "INSTANCE"
+
+  targets {
+    key    = "tag:Patch Group"
+    values = [var.patchgroup]
+  }
+}
+
+resource "aws_ssm_maintenance_window_task" "patch" {
+  max_concurrency = "100%"
+  max_errors      = 3
+  priority        = 1
+  task_arn        = "AWS-RunPatchBaseline"
+  task_type       = "RUN_COMMAND"
+  window_id       = var.mtcwindowid
+  name            = var.patchgroup
+  description     = "${var.patchgroup} Task"
+  service_role_arn = var.service_role 
+
+  targets {
+    key    = "WindowTargetIds"
+    values = [aws_ssm_maintenance_window_target.patch.id]
+  }
+
+  task_invocation_parameters {
+    run_command_parameters {
+      output_s3_bucket     = "devops.kabbage"
+      output_s3_key_prefix = "Patching/${var.patchgroup}"
+
+      notification_config {
+        notification_arn    = var.sns_topic
+        notification_events = ["All"]
+        notification_type   = "Command"
+      }
+
+      parameter {
+        name   = "Operation"
+        values = ["Install"]
+      }
+      parameter {
+        name   = "RebootOption"
+        values = ["NoReboot"]
+      }
+    }
+  }
+}
+
+-------------------------------
+# terraform - modules - scan - main.tf
+-------------------------------
+
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 3.33.0"
+    }
+  }
+}
+
+variable patchgroup {
+  description = "tag value for Patch Group"
+  type = string
+}
+
+variable mtcwindowid {
+  description = "ID for Maintenance Window resource"
+  type = string
+}
+
+variable baseline {
+  description = "Patch baseline to use"
+  type = string
+}
+
+variable sns_topic {
+  description = "SNS Topic to send notifications to"
+  type = string
+}
+
+variable service_role {
+  description = "IAM role to run under"
+  type = string
+}
+
+# We are using the AWS managed patch baselines.  So, create patch groups
+resource "aws_ssm_patch_group" "patch" {
+  baseline_id = var.baseline
+  patch_group = var.patchgroup
+}
+
+resource "aws_ssm_maintenance_window_target" "patch" {
+  window_id     = var.mtcwindowid
+  name          = "${var.patchgroup}-maintenance-window-target"
+  description   = "${var.patchgroup} Patch Targets"
+  resource_type = "INSTANCE"
+
+  targets {
+    key    = "tag:Patch Group"
+    values = [var.patchgroup]
+  }
+}
+
+resource "aws_ssm_maintenance_window_task" "patch" {
+  max_concurrency = "100%"
+  max_errors      = 3
+  priority        = 1
+  task_arn        = "AWS-RunPatchBaseline"
+  task_type       = "RUN_COMMAND"
+  window_id       = var.mtcwindowid
+  name            = var.patchgroup
+  description     = "${var.patchgroup} Task"
+  service_role_arn = var.service_role
+
+  targets {
+    key    = "WindowTargetIds"
+    values = [aws_ssm_maintenance_window_target.patch.id]
+  }
+
+  task_invocation_parameters {
+    run_command_parameters {
+      output_s3_bucket     = "devops.kabbage"
+      output_s3_key_prefix = "Patching/${var.patchgroup}"
+
+      notification_config {
+        notification_arn    = var.sns_topic
+        notification_events = ["All"]
+        notification_type   = "Command"
+      }
+
+      parameter {
+        name   = "Operation"
+        values = ["Scan"]
+      }
+      parameter {
+        name   = "RebootOption"
+        values = ["NoReboot"]
+      }
+    }
+  }
+}
+
+-------------------------------
+# data.tf
+-------------------------------
+
+data "aws_caller_identity" "current" {
+}
+
+data "aws_ssm_patch_baseline" "centos" {
+  owner            = "AWS"
+  name_prefix      = "AWS-"
+  operating_system = "CENTOS"
+}
+
+data "aws_ssm_patch_baseline" "redhat" {
+  owner            = "AWS"
+  name_prefix      = "AWS-"
+  operating_system = "REDHAT_ENTERPRISE_LINUX"
+}
+
+data "aws_ssm_patch_baseline" "aml2" {
+  owner            = "AWS"
+  name_prefix      = "AWS-"
+  operating_system = "AMAZON_LINUX_2"
+}
+
+data "aws_ssm_patch_baseline" "ubuntu" {
+  owner            = "AWS"
+  name_prefix      = "AWS-"
+  operating_system = "UBUNTU"
+}
+
+data "aws_ssm_patch_baseline" "macos" {
+  owner            = "AWS"
+  name_prefix      = "AWS-"
+  operating_system = "MACOS"
+}
+
+-------------------------------
+# iam.tf
+-------------------------------
+resource "aws_iam_role" "patch_ssm_role" {
+  name = "linux_patch_ssm_role"
+
+  description = "Role used by SSM for patch install/scan."
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Sid    = ""
+        Principal = {
+          Service = "ssm.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = merge(
+    local.standard_tags,
+    {
+      Name = "Linux Patch SSM Role"
+    }
+  )
+
+}
+
+resource "aws_iam_role_policy" "linux_patch_ssm_policy" {
+  name = "linux_patch_ssm_policy"
+  role = aws_iam_role.patch_ssm_role.id
+
+  policy = <<-EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ssm:CancelCommand",
+                "ssm:GetCommandInvocation",
+                "ssm:ListCommandInvocations",
+                "ssm:ListCommands",
+                "ssm:SendCommand",
+                "ssm:GetAutomationExecution",
+                "ssm:GetParameters",
+                "ssm:StartAutomationExecution",
+                "ssm:ListTagsForResource",
+                "ssm:GetCalendarState",
+                "ssm:DescribeInstanceInformation",
+                "ssm:GetInventory"
+            ],
+            "Resource": [
+                "*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ssm:UpdateServiceSetting",
+                "ssm:GetServiceSetting"
+            ],
+            "Resource": [
+                "arn:aws:ssm:*:*:servicesetting/ssm/opsitem/*",
+                "arn:aws:ssm:*:*:servicesetting/ssm/opsdata/*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeInstanceStatus",
+                "ec2:DescribeInstances",
+                "ec2:DescribeVpcs"
+            ],
+            "Resource": [
+                "*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "lambda:InvokeFunction"
+            ],
+            "Resource": [
+                "arn:aws:lambda:*:*:function:SSM*",
+                "arn:aws:lambda:*:*:function:*:SSM*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "states:DescribeExecution",
+                "states:StartExecution"
+            ],
+            "Resource": [
+                "arn:aws:states:*:*:stateMachine:SSM*",
+                "arn:aws:states:*:*:execution:SSM*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "resource-groups:ListGroups",
+                "resource-groups:ListGroupResources",
+		"resource-groups:GetGroupQuery"
+            ],
+            "Resource": [
+                "*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "cloudformation:DescribeStacks",
+                "cloudformation:ListStackResources"
+            ],
+            "Resource": [
+                "*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "tag:GetResources"
+            ],
+            "Resource": [
+                "*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "config:SelectResourceConfig"
+            ],
+            "Resource": [
+                "*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "compute-optimizer:GetEC2InstanceRecommendations",
+                "compute-optimizer:GetEnrollmentStatus"
+            ],
+            "Resource": [
+                "*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "support:DescribeTrustedAdvisorChecks",
+                "support:DescribeTrustedAdvisorCheckSummaries",
+                "support:DescribeTrustedAdvisorCheckResult",
+                "support:DescribeCases"
+            ],
+            "Resource": [
+                "*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "config:DescribeComplianceByConfigRule",
+                "config:DescribeComplianceByResource",
+                "config:DescribeRemediationConfigurations",
+                "config:DescribeConfigurationRecorders"
+            ],
+            "Resource": [
+                "*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": "iam:PassRole",
+            "Resource": "*",
+            "Condition": {
+                "StringEquals": {
+                    "iam:PassedToService": [
+                        "ssm.amazonaws.com"
+                    ]
+                }
+            }
+        },
+        {
+            "Effect": "Allow",
+            "Action": "organizations:DescribeOrganization",
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": "cloudformation:ListStackSets",
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "cloudformation:ListStackInstances",
+                "cloudformation:DescribeStackSetOperation",
+                "cloudformation:DeleteStackSet"
+            ],
+            "Resource": "arn:aws:cloudformation:*:*:stackset/AWS-QuickSetup-SSM*:*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": "cloudformation:DeleteStackInstances",
+            "Resource": [
+                "arn:aws:cloudformation:*:*:stackset/AWS-QuickSetup-SSM*:*",
+                "arn:aws:cloudformation:*:*:stackset-target/AWS-QuickSetup-SSM*:*",
+                "arn:aws:cloudformation:*:*:type/resource/*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "events:PutRule",
+                "events:PutTargets"
+            ],
+            "Resource": "*",
+            "Condition": {
+                "StringEquals": {
+                    "events:ManagedBy": "ssm.amazonaws.com"
+                }
+            }
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "events:RemoveTargets",
+                "events:DeleteRule"
+            ],
+            "Resource": [
+                "arn:aws:events:*:*:rule/SSMExplorerManagedRule"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": "events:DescribeRule",
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": "securityhub:DescribeHub",
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": "sns:Publish",
+            "Resource": [
+                "${module.notify_slack.slack_topic_arn}"
+            ]
+        }
+    ]
+}
+EOF
+}
+
+-------------------------------
+# main.tf
+-------------------------------
+provider "aws" {
+  region = "us-east-1"
+
+  assume_role {
+    role_arn    = var.role_arn
+    external_id = var.session_name
+  }
+
+}
+
+terraform {
+  required_version = ">= 0.15"
+
+  required_providers {
+    aws = {
+      version = ">= 3.78.0"
+    }
+  }
+
+  backend "s3" {
+    key    = "devops/patchmanager"
+    region = "us-east-1"
+  }
+
+}
+
+-------------------------------
+# patching.tf
+-------------------------------
+
+#####################
+# patchgroup is defined as 'os-patch' to indicate that it will be auto-patched in the window
+
+module "centos-patch" {
+  source = "./modules/patch"
+  mtcwindowid = aws_ssm_maintenance_window.patch.id
+  patchgroup = "centos-patch"
+  baseline = data.aws_ssm_patch_baseline.centos.id
+  sns_topic = module.notify_slack.slack_topic_arn
+  service_role = aws_iam_role.patch_ssm_role.arn
+}
+
+module "redhat-patch" {
+  source = "./modules/patch"
+  mtcwindowid = aws_ssm_maintenance_window.patch.id
+  patchgroup = "redhat-patch"
+  baseline = data.aws_ssm_patch_baseline.redhat.id
+  sns_topic = module.notify_slack.slack_topic_arn
+  service_role = aws_iam_role.patch_ssm_role.arn
+}
+
+module "ubuntu-patch" {
+  source = "./modules/patch"
+  mtcwindowid = aws_ssm_maintenance_window.patch.id
+  patchgroup = "ubuntu-patch"
+  baseline = data.aws_ssm_patch_baseline.ubuntu.id
+  sns_topic = module.notify_slack.slack_topic_arn
+  service_role = aws_iam_role.patch_ssm_role.arn
+}
+
+module "aml2-patch" {
+  source = "./modules/patch"
+  mtcwindowid = aws_ssm_maintenance_window.patch.id
+  patchgroup = "aml2-patch"
+  baseline = data.aws_ssm_patch_baseline.aml2.id
+  sns_topic = module.notify_slack.slack_topic_arn
+  service_role = aws_iam_role.patch_ssm_role.arn
+}
+
+
+-------------------------------
+# scaning.tf
+-------------------------------
+
+#####################
+# patchgroup is defined as 'os-scan' to indicate that it will be scanned but not auto-patched 
+
+module "centos-scan" {
+  source = "./modules/scan"
+  mtcwindowid = aws_ssm_maintenance_window.scan.id
+  patchgroup = "centos-scan"
+  baseline = data.aws_ssm_patch_baseline.centos.id
+  sns_topic = module.notify_slack.slack_topic_arn
+  service_role = aws_iam_role.patch_ssm_role.arn
+}
+
+module "redhat-scan" {
+  source = "./modules/scan"
+  mtcwindowid = aws_ssm_maintenance_window.scan.id
+  patchgroup = "redhat-scan"
+  baseline = data.aws_ssm_patch_baseline.redhat.id
+  sns_topic = module.notify_slack.slack_topic_arn
+  service_role = aws_iam_role.patch_ssm_role.arn
+}
+
+module "ubuntu-scan" {
+  source = "./modules/scan"
+  mtcwindowid = aws_ssm_maintenance_window.scan.id
+  patchgroup = "ubuntu-scan"
+  baseline = data.aws_ssm_patch_baseline.ubuntu.id
+  sns_topic = module.notify_slack.slack_topic_arn
+  service_role = aws_iam_role.patch_ssm_role.arn
+}
+
+module "aml2-scan" {
+  source = "./modules/scan"
+  mtcwindowid = aws_ssm_maintenance_window.scan.id
+  patchgroup = "aml2-scan"
+  baseline = data.aws_ssm_patch_baseline.aml2.id
+  sns_topic = module.notify_slack.slack_topic_arn
+  service_role = aws_iam_role.patch_ssm_role.arn
+}
+
+-------------------------------
+# sns.tf
+-------------------------------
+data "aws_secretsmanager_secret" "slack" {
+  arn = "arn:aws:secretsmanager:us-east-1:144845679415:secret:prod/slack/webhook/kamexdevopsnotification-9LRWS9"
+}
+
+data "aws_secretsmanager_secret_version" "slack" {
+  secret_id = data.aws_secretsmanager_secret.slack.id
+}
+
+module "notify_slack" {
+  source  = "terraform-aws-modules/notify-slack/aws"
+  version = "~> 4.0"
+
+  # This must be UNIQUE per account.
+  lambda_function_name = "slack_devops_notify"
+
+  sns_topic_name = "Linux-Patch-Updates"
+
+  slack_webhook_url = data.aws_secretsmanager_secret_version.slack.secret_string
+  slack_channel     = "kamex-devops-notifications"
+  slack_username    = "Patch Manager"
+  slack_emoji       = ":aws:"
+}
+
+-------------------------------
+# var.tf
+-------------------------------
+# used in provider auth
+variable role_arn {
+  description = "What we run as"
+  type        = string
+}
+
+variable session_name {
+   description = "String used in IAM role assumption"
+   type = string
+}
+
+# used in tags
+variable result_url {
+   description = "URL breadcrumb back to bamboo"
+   type = string
+}
+
+variable env {
+   description = "From environment name"
+   type = string
+}
+
+#base tags
+# devops is 905
+locals {
+  standard_tags = {
+    costcode       = 905
+    env            = var.env
+    servicegroup   = "shared"
+    serviceowner   = "devops"
+    team           = "devops"
+    compliance     = "none"
+    classification = "public"
+    impact         = "noncritical"
+    created_by     = "terraform"
+    service        = "eks_api"
+    build          = var.result_url
+  }
+}
+
+
+-------------------------------
+# window.tf
+-------------------------------
+
+# Maintenance Windows
+#
+# Patching
+resource "aws_ssm_maintenance_window" "patch" {
+  name     = "patch-maintenance-window"
+  schedule = "cron(0 8 ? * * *)"
+  schedule_timezone = "America/New_York"
+  duration = 2
+  cutoff   = 1
+
+  tags = merge(
+    local.standard_tags,
+    {
+      Name = "Linux System Patch Window"
+    }
+  )
+
+}
+
+# Scanning, which does NOT patch.  
+resource "aws_ssm_maintenance_window" "scan" {
+  name     = "patch-scan-maintenance-window"
+  schedule = "cron(0 9 ? * * *)"
+  schedule_timezone = "America/New_York"
+  duration = 2
+  cutoff   = 1
+
+  tags = merge(
+    local.standard_tags,
+    {
+      Name = "Linux System Patch Scan Window"
+    }
+  )
+
+}
